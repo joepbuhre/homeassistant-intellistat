@@ -1,0 +1,11 @@
+{
+  "codeowners": ["@joepbuhre"],
+  "config_flow": false,
+  "dependencies": [],
+  "documentation": "https://github.com/user/my_component/",
+  "domain": "intellistat",
+  "iot_class": "local_polling",
+  "name": "Intellistat",
+  "requirements": [],
+  "version": "0.1.0-b1"
+}
