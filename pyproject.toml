@@ -5,10 +5,10 @@ description = ""
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
 
-[tool.poetry.group.dev.dependencies]
-python = "^3.12"
+[tool.poetry.dependencies]
+python = ">=3.11,<3.13"
 homeassistant = "^2024.2.2"
-black = "^24.2.0"
+
 
 [build-system]
 requires = ["poetry-core"]
