@@ -1,0 +1,15 @@
+{
+  "options": {
+    "step": {
+      "user": {
+        "description": "Select your controller",
+        "data": {
+          "controller": "This talks to the Central Heating"
+        }
+      },
+      "zones": {
+        "description": "Select the climate's which control your zones"
+      }
+    }
+  }
+}

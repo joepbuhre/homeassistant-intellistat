@@ -1,6 +1,7 @@
 {
   "codeowners": ["@joepbuhre"],
   "config_flow": true,
+  "options_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/user/my_component/",
   "domain": "intellistat",
