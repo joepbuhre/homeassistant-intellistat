@@ -7,6 +7,13 @@
           "controller": "This talks to the Central Heating"
         }
       },
+      "controller_settings": {
+        "description": "Set the controller settings",
+        "data": {
+          "max_setpoint": "Maximum temperature the controller is allowed to heat to",
+          "controller_delay_time": "Delay which the controller will use to start heating"
+        }
+      },
       "zones": {
         "description": "Select the climate's which control your zones"
       }

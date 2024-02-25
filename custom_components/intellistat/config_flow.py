@@ -2,12 +2,13 @@
 from collections import OrderedDict
 import secrets
 import logging
+from typing import List
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers import selector
+from homeassistant.helpers import selector, entity
 from homeassistant.components.climate import (
     ATTR_MIN_TEMP,
     ATTR_MAX_TEMP
@@ -55,11 +56,26 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry):
         """Initialize options flow."""
         self.config_entry = config_entry
-
         self.controller = None
-        self.zones = None
+        self.zones: List[str] | None = None
         self.max_setpoint = None
         self.controller_delay_time = None
+
+        curr_settings = config_entry.as_dict()['options']
+
+        # Checking if we already have a controller
+        if 'controller' in curr_settings: self.controller = curr_settings['controller']
+        if 'zones' in curr_settings: self.zones = curr_settings['zones']
+        if 'max_setpoint' in curr_settings: self.max_setpoint = curr_settings['max_setpoint']
+        if 'controller_delay_time' in curr_settings: self.controller_delay_time = curr_settings['controller_delay_time']
+
+
+    def __get_unit_of_measurement(self):
+        if self.controller is None:
+            return const.DEFAULT_UNIT_OF_MEASURE
+        uom = entity.get_unit_of_measurement(self.hass, self.controller)
+        
+        return const.DEFAULT_UNIT_OF_MEASURE if uom is None else uom
 
     async def async_step_init(self, user_input=None):
         """Handle options flow."""
@@ -70,57 +86,38 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_user(self, user_input=None):
         _LOGGER.debug("Currently at: [async_step_user]")
         if user_input is not None:
+            _LOGGER.debug("Got user input, continuing to controller_settings")
             self.controller = user_input.get(const.CONF_CONTROLLER)
-            return await self.async_step_zones()
+            return await self.async_step_controller_settings()
 
         fields = OrderedDict()
+
+        # Setup choosing controller
         fields[
-            vol.Optional(
-                'controller',
+            vol.Required(
+                'controller', default=self.controller
             )
         ] = selector.EntitySelector(
-            selector.EntitySelectorConfig(
-                domain=["climate", "switch"],
-                multiple=False,
+                selector.EntitySelectorConfig(
+                    domain=["climate", "switch"],
+                    multiple=False
+                )
             )
-        )
-
         return self.async_show_form(step_id="user", data_schema=vol.Schema(fields))
-        
 
-    async def async_step_zones(self, user_input=None):
-        """Handle options flow."""
-        _LOGGER.debug('Currently at: [async_step_zones]')
+    async def async_step_controller_settings(self, user_input=None):
 
         if user_input is not None:
-            _LOGGER.debug("Got user_input, continuing to setting max_setpoint")
-            self.zones = user_input.get(const.CONF_ZONES)
-            return await self.async_step_max_setpoint()
-
-        zone_controllers = OrderedDict()
-
-        zone_controllers[
-            vol.Optional(
-                'zones',
-            )
-        ] = selector.EntitySelector(
-            selector.EntitySelectorConfig(
-                domain=["climate"],
-                multiple=True,
-            )
-        )
-        return self.async_show_form(step_id=const.CONF_ZONES, data_schema=vol.Schema(zone_controllers))
-
-
-
-    async def async_step_max_setpoint(self, user_input=None):
-        """Handle options flow."""
-        _LOGGER.debug('Currently at: [async_step_max_setpoint]')
-
-        if user_input is not None:
+            _LOGGER.debug("Got user_input, continuing to setting zones")
             self.max_setpoint = user_input.get(const.CONF_MAX_SETPOINT)
-            return await self.async_step_controller_delay_time()
+            self.controller_delay_time = user_input.get(const.CONF_CONTROLLER_DELAY_TIME)
 
+            return await self.async_step_zones()
+
+
+        fields = OrderedDict()
+        
+        # Setup max_setupoint for controller
         controller_state = self.hass.states.get(self.controller)
         min_temp = 0
         max_temp = 100
@@ -132,27 +129,36 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         if not default or default < min_temp or default > max_temp:
             default = round((min_temp + max_temp)/2)
 
-        return self.async_show_form(
-            step_id=const.CONF_MAX_SETPOINT,
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        const.CONF_MAX_SETPOINT,
-                        default=const.DEFAULT_MAX_SETPOINT
-                    ): vol.All(
-                        vol.Coerce(int),
-                        vol.Range(min=min_temp, max=max_temp)
-                    )
-                }
-            )
-        )
+        default = max_temp if max_temp < 100 else const.DEFAULT_MAX_SETPOINT
+        default = self.max_setpoint if self.max_setpoint is not None else default
 
-    async def async_step_controller_delay_time(self, user_input=None):
+        fields[
+            vol.Required(
+                const.CONF_MAX_SETPOINT,
+                default=default
+            )
+        ] = selector.NumberSelector(
+                selector.NumberSelectorConfig(min=min_temp, max=max_temp, unit_of_measurement=self.__get_unit_of_measurement())
+            )
+
+        # Setup delay time
+        fields[
+            vol.Required(
+                const.CONF_CONTROLLER_DELAY_TIME,
+                default=self.controller_delay_time if self.controller_delay_time is not None else const.DEFAULT_CONTROLLER_DELAY_TIME
+            )] = selector.NumberSelector(
+                        selector.NumberSelectorConfig(min=10, max=300, unit_of_measurement="seconds")
+                    )     
+        return self.async_show_form(step_id="controller_settings", data_schema=vol.Schema(fields))
+
+
+    async def async_step_zones(self, user_input=None):
         """Handle options flow."""
-        _LOGGER.debug('Currently at: [async_step_controller_delay_time]')
+        _LOGGER.debug('Currently at: [async_step_zones]')
 
         if user_input is not None:
-            self.controller_delay_time = user_input.get(const.CONF_CONTROLLER_DELAY_TIME)
+            _LOGGER.debug("Got user_input, continuing to setting max_setpoint")
+            self.zones = user_input.get(const.CONF_ZONES)
 
             return self.async_create_entry(title="", data={
                 const.CONF_ZONES: self.zones,
@@ -161,21 +167,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 const.CONF_CONTROLLER_DELAY_TIME: self.controller_delay_time,
             })
 
-        default = self.config_entry.options.get(const.CONF_CONTROLLER_DELAY_TIME)
-        if not default:
-            default = const.DEFAULT_CONTROLLER_DELAY_TIME
+        zone_controllers = OrderedDict()
 
-        return self.async_show_form(
-            step_id=const.CONF_CONTROLLER_DELAY_TIME,
-            data_schema=vol.Schema(
-                {
-                    vol.Required(
-                        const.CONF_CONTROLLER_DELAY_TIME,
-                        default=default
-                    ): vol.All(
-                        vol.Coerce(int),
-                        vol.Range(min=10, max=300)
-                    )
-                }
+        zone_controllers[
+            vol.Required(
+                const.CONF_ZONES,
+                default=self.zones
+            )
+        ] = selector.EntitySelector(
+            selector.EntitySelectorConfig(
+                domain=["climate"],
+                multiple=True,
+                exclude_entities=[self.controller]
             )
         )
+        return self.async_show_form(step_id=const.CONF_ZONES, data_schema=vol.Schema(zone_controllers))

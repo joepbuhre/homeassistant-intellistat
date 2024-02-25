@@ -4,6 +4,7 @@ in
   pkgs.mkShell {
     buildInputs = [
       pkgs.python312
+      pkgs.poetry
     ];
 
 }
