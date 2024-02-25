@@ -1,5 +1,8 @@
+import asyncio
 import logging
 import datetime
+from types import MappingProxyType
+from typing import Any
 import homeassistant.util.dt as dt_util
 
 from homeassistant import config_entries
@@ -10,6 +13,7 @@ from homeassistant.const import (
 )
 from homeassistant.core import (
     HomeAssistant,
+    Event,
     callback
 )
 from homeassistant.helpers.restore_state import RestoreEntity
@@ -19,6 +23,8 @@ from homeassistant.helpers.entity import ToggleEntity
 from homeassistant.helpers.event import (
     async_track_state_change,
     async_track_point_in_time,
+    _async_track_event,
+
 )
 from homeassistant.components.climate.const import (
     ATTR_HVAC_MODE,
@@ -28,6 +34,11 @@ from homeassistant.components.climate.const import (
     ATTR_CURRENT_TEMPERATURE,
     ATTR_TARGET_TEMP_STEP,
 )
+
+from homeassistant.const import (
+    MATCH_ALL
+)
+
 from . import const
 from .util import (
     parse_state,
@@ -40,7 +51,6 @@ from .util import (
 
 _LOGGER = logging.getLogger(__name__)
 
-
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: config_entries.ConfigEntry,
@@ -52,25 +62,27 @@ async def async_setup_entry(
     zones = config_entry.options.get(const.CONF_ZONES, [])
     max_setpoint = config_entry.options.get(const.CONF_MAX_SETPOINT)
     controller_delay_time = config_entry.options.get(const.CONF_CONTROLLER_DELAY_TIME, const.DEFAULT_CONTROLLER_DELAY_TIME)
-
+    ignore_controller = config_entry.options.get(const.CONF_IGNORE_CONTROLLER, const.DEFAULT_IGNORE_CONTROLLER) 
+    
     async_add_entities([
-        ZonedHeaterSwitch(hass, controller, zones, max_setpoint, controller_delay_time)
+        ZonedHeaterSwitch(hass, controller, zones, max_setpoint, controller_delay_time, ignore_controller, config_entry.options)
     ])
-
 
 class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
     _attr_name = "Zoned Heating"
 
-    def __init__(self, hass, controller_entity, zone_entities, max_setpoint, controller_delay_time):
+    def __init__(self, hass, controller_entity: str, zone_entities, max_setpoint, controller_delay_time, ignore_controller: bool, config_options: MappingProxyType[str, Any]):
         self.hass = hass
         self._controller_entity = controller_entity
         self._zone_entities = zone_entities
         self._max_setpoint = max_setpoint
         self._controller_delay_time = controller_delay_time
+        self._config_options = config_options
+        self._ignore_controller = ignore_controller
 
         self._enabled = None
-        self._state_listeners = []
+        self._state_listeners = {}
         self._ignore_controller_state_change_timer = None
         self._override_active = False
         self._temperature_increase = 0
@@ -94,7 +106,9 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
         if self._enabled:
             await self.async_start_state_listeners()
+    
         await self.async_calculate_override()
+        _LOGGER.debug("Added to hass")
 
     async def async_will_remove_from_hass(self):
         """remove entity from hass."""
@@ -139,26 +153,45 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
     async def async_start_state_listeners(self):
         """start watching for state changes of controller / zone entities"""
+        _LOGGER.debug("Setting up listeners")
         await self.async_stop_state_listeners()
+
         if not len(self._zone_entities) or not self._controller_entity:
             return
-        self._state_listeners = [
-            async_track_state_change(
+
+        if self._ignore_controller:
+            async def set_initial_temperature(event: Event):
+                if event.data.get('entity_id') == 'climate.climate_controller':
+                    st = parse_state(event.data.get('new_state'))
+                    if st[ATTR_CURRENT_TEMPERATURE] is not None and st[ATTR_CURRENT_TEMPERATURE] > 0 and 'init_temperature' in self._state_listeners:
+                        self._state_listeners.pop('init_temperature')()
+                        await async_set_temperature(self.hass, self._controller_entity, st[ATTR_CURRENT_TEMPERATURE])
+
+            self._state_listeners['init_temperature'] = self.hass.bus.async_listen(
+                MATCH_ALL, set_initial_temperature
+            )
+
+
+        self._state_listeners = {
+            'controller_state': async_track_state_change(
                 self.hass,
                 self._controller_entity,
                 self.async_controller_state_changed,
+
             ),
-            async_track_state_change(
+            'zone_state':  async_track_state_change(
                 self.hass,
                 self._zone_entities,
                 self.async_zone_state_changed,
             )
-        ]
+        }
+
 
     async def async_stop_state_listeners(self):
         """stop watching for state changes of controller / zone entities"""
-        while len(self._state_listeners):
-            self._state_listeners.pop()()
+        for key,fn in self._state_listeners.items():
+            fn()
+        self._state_listeners.clear()
 
     @callback
     async def async_controller_state_changed(self, entity, old_state, new_state):
@@ -169,10 +202,14 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         new_state = parse_state(new_state)
 
         if new_state[ATTR_TEMPERATURE] != old_state[ATTR_TEMPERATURE]:
+            new_setpoint = new_state[ATTR_CURRENT_TEMPERATURE] if self._ignore_controller else new_state[ATTR_TEMPERATURE]
             # if controller setpoint has changed, make sure to store it
-            _LOGGER.debug("Storing controller setpoint={}".format(new_state[ATTR_TEMPERATURE]))
-            self._stored_controller_setpoint = new_state[ATTR_TEMPERATURE]
+            _LOGGER.debug("Storing controller setpoint={}".format(new_setpoint))
+            self._stored_controller_setpoint = new_setpoint
             self.async_write_ha_state()
+            if self._ignore_controller:
+                await self._ignore_controller_state_changes()
+                await async_set_temperature(self.hass, self._controller_entity, old_state[ATTR_TEMPERATURE])
 
         if new_state[ATTR_HVAC_MODE] != old_state[ATTR_HVAC_MODE] and new_state[ATTR_HVAC_MODE] == HVACAction.OFF:
             _LOGGER.debug("Controller was turned off, disable zones")
@@ -225,9 +262,16 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
             # nothing to do
             return
 
+        # Check if max step is active (If not zero it's enabled)
+        max_step = self._config_options.get(const.CONF_CONTROLLER_MAX_STEP, const.DEFAULT_CONTROLLER_MAX_STEP)
+        if max_step != 0:
+            if max_step < temperature_increase:
+                _LOGGER.debug("Taking max step in account: {}".format(max_step))
+                temperature_increase = max_step
+
         _LOGGER.debug(
-            "Updated override temperature_increase={}, override_active={}"
-            .format(temperature_increase, override_active)
+            "Updated override temperature_increase={}, override_active={}, max_step={}"
+            .format(temperature_increase, override_active, max_step)
         )
 
         if override_active and not self._override_active:
@@ -244,10 +288,15 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
         self._override_active = True
         current_state = parse_state(self.hass.states.get(self._controller_entity))
+        
+        # If input needs to be ignored, let's set it to the actual current temperature
+        if self._config_options.get(const.CONF_IGNORE_CONTROLLER, const.DEFAULT_IGNORE_CONTROLLER) == True:
+            await async_set_temperature(self.hass, self._controller_entity, current_state[ATTR_CURRENT_TEMPERATURE]) 
+        
         # store current controller entity settings for later
         _LOGGER.debug("Storing controller state={}".format(current_state))
         self._stored_controller_state = current_state[ATTR_HVAC_MODE]
-        self._stored_controller_setpoint = current_state[ATTR_TEMPERATURE]
+        self._stored_controller_setpoint = current_state[ATTR_CURRENT_TEMPERATURE] if self._ignore_controller else current_state[ATTR_TEMPERATURE]
 
         if current_state[ATTR_HVAC_MODE] != HVACMode.HEAT:
             # uupdate to heat mode if needed

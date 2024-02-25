@@ -2,11 +2,12 @@
 from collections import OrderedDict
 import secrets
 import logging
-from typing import List
+from typing import Any, Dict, List
 import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
+from homeassistant.const import UnitOfTemperature
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import selector, entity
 from homeassistant.components.climate import (
@@ -56,38 +57,47 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
     def __init__(self, config_entry: config_entries.ConfigEntry):
         """Initialize options flow."""
         self.config_entry = config_entry
-        self.controller = None
-        self.zones: List[str] | None = None
-        self.max_setpoint = None
-        self.controller_delay_time = None
-
-        curr_settings = config_entry.as_dict()['options']
+        curr_settings = config_entry.options
+        self.curr_settings = config_entry.options
 
         # Checking if we already have a controller
-        if 'controller' in curr_settings: self.controller = curr_settings['controller']
-        if 'zones' in curr_settings: self.zones = curr_settings['zones']
-        if 'max_setpoint' in curr_settings: self.max_setpoint = curr_settings['max_setpoint']
-        if 'controller_delay_time' in curr_settings: self.controller_delay_time = curr_settings['controller_delay_time']
-
+        self.controller = curr_settings.get(const.CONF_CONTROLLER)
+        self.controller_max_step = curr_settings.get(const.CONF_CONTROLLER_MAX_STEP)
+        self.zones: List[str] | None  = curr_settings.get(const.CONF_ZONES)
+        self.max_setpoint = curr_settings.get(const.CONF_MAX_SETPOINT)
+        self.controller_delay_time = curr_settings.get(const.CONF_CONTROLLER_DELAY_TIME)
+        self.ignore_controller = curr_settings.get(const.CONF_IGNORE_CONTROLLER)
 
     def __get_unit_of_measurement(self):
         if self.controller is None:
             return const.DEFAULT_UNIT_OF_MEASURE
         uom = entity.get_unit_of_measurement(self.hass, self.controller)
         
-        return const.DEFAULT_UNIT_OF_MEASURE if uom is None else uom
+        return UnitOfTemperature.CELSIUS if uom is None else uom
+
+    def __get_climate_step(self):
+        if self.controller is None:
+            return 1
+        step = self.hass.states.get(self.controller).attributes.get('target_temp_step', 1)
+        return step
+
+    def __parse_user_input(self, user_input):
+        for key in user_input:
+            if user_input.get(key):
+                self.__setattr__(key,  user_input.get(key))
+
+        pass
 
     async def async_step_init(self, user_input=None):
         """Handle options flow."""
         _LOGGER.debug('Currently at: [async_step_init]')
-
         return await self.async_step_user()
         
     async def async_step_user(self, user_input=None):
         _LOGGER.debug("Currently at: [async_step_user]")
         if user_input is not None:
             _LOGGER.debug("Got user input, continuing to controller_settings")
-            self.controller = user_input.get(const.CONF_CONTROLLER)
+            self.__parse_user_input(user_input)
             return await self.async_step_controller_settings()
 
         fields = OrderedDict()
@@ -95,7 +105,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         # Setup choosing controller
         fields[
             vol.Required(
-                'controller', default=self.controller
+                const.CONF_CONTROLLER, default=self.controller
             )
         ] = selector.EntitySelector(
                 selector.EntitySelectorConfig(
@@ -105,13 +115,10 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             )
         return self.async_show_form(step_id="user", data_schema=vol.Schema(fields))
 
-    async def async_step_controller_settings(self, user_input=None):
+    async def async_step_controller_settings(self, user_input: Dict[str, Any] =None):
 
         if user_input is not None:
-            _LOGGER.debug("Got user_input, continuing to setting zones")
-            self.max_setpoint = user_input.get(const.CONF_MAX_SETPOINT)
-            self.controller_delay_time = user_input.get(const.CONF_CONTROLLER_DELAY_TIME)
-
+            self.__parse_user_input(user_input)
             return await self.async_step_zones()
 
 
@@ -138,7 +145,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 default=default
             )
         ] = selector.NumberSelector(
-                selector.NumberSelectorConfig(min=min_temp, max=max_temp, unit_of_measurement=self.__get_unit_of_measurement())
+                selector.NumberSelectorConfig(min=min_temp, max=max_temp, unit_of_measurement=self.__get_unit_of_measurement(), step=self.__get_climate_step())
             )
 
         # Setup delay time
@@ -147,8 +154,32 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 const.CONF_CONTROLLER_DELAY_TIME,
                 default=self.controller_delay_time if self.controller_delay_time is not None else const.DEFAULT_CONTROLLER_DELAY_TIME
             )] = selector.NumberSelector(
-                        selector.NumberSelectorConfig(min=10, max=300, unit_of_measurement="seconds")
+                        selector.NumberSelectorConfig(min=0, max=10, unit_of_measurement="seconds", step=0.5)
                     )     
+
+        # Setup max step controller
+        fields[
+            vol.Required(
+                const.CONF_CONTROLLER_MAX_STEP,
+                default=self.curr_settings.get(const.CONF_CONTROLLER_MAX_STEP, const.DEFAULT_CONTROLLER_MAX_STEP)
+            )
+        ] = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                 min=0
+                ,max=self.hass.states.get(self.controller).attributes.get('max_temp', 1) # self .get(const.CONF_CONTROLLER_MAX_STEP,const.DEFAULT_CONTROLLER_MAX_STEP)
+                ,unit_of_measurement=self.__get_unit_of_measurement()
+                ,step=self.__get_climate_step()
+            )
+        )
+        
+        # Ask if controller input should be ignored
+        fields[
+            vol.Required(
+                const.CONF_IGNORE_CONTROLLER,
+                default=self.curr_settings.get(const.CONF_IGNORE_CONTROLLER, const.DEFAULT_IGNORE_CONTROLLER)
+            )
+        ] = selector.BooleanSelector()
+
         return self.async_show_form(step_id="controller_settings", data_schema=vol.Schema(fields))
 
 
@@ -157,15 +188,18 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         _LOGGER.debug('Currently at: [async_step_zones]')
 
         if user_input is not None:
-            _LOGGER.debug("Got user_input, continuing to setting max_setpoint")
-            self.zones = user_input.get(const.CONF_ZONES)
+            _LOGGER.debug("Got user_input, continuing to finalizing setup")
+            self.__parse_user_input(user_input)
 
             return self.async_create_entry(title="", data={
                 const.CONF_ZONES: self.zones,
                 const.CONF_CONTROLLER: self.controller,
                 const.CONF_MAX_SETPOINT: self.max_setpoint,
                 const.CONF_CONTROLLER_DELAY_TIME: self.controller_delay_time,
+                const.CONF_IGNORE_CONTROLLER: self.ignore_controller,
+                const.CONF_CONTROLLER_MAX_STEP: self.controller_max_step
             })
+        
 
         zone_controllers = OrderedDict()
 
