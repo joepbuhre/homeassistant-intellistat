@@ -1,0 +1,119 @@
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+logger:
+  default: INFO
+  logs:
+    custom_components.intellistat: DEBUG
+
+input_number:
+  temp_slider_controller:
+    name: Slider
+    initial: 20
+    min: 5
+    max: 35
+    step: 0.5
+  temp_slider_bedroom:
+    name: Numeric Input Box
+    initial: 20
+    min: 5
+    max: 35
+    step: 0.5
+  temp_slider_livingroom:
+    name: Numeric Input Box
+    initial: 20
+    min: 5
+    max: 35
+    step: 0.5
+
+sensor:
+  - platform: template
+    sensors:
+      controller_temperature:
+        friendly_name: "Controller Temp Sensor"
+        unit_of_measurement: "celsius"
+        value_template: "{{ states('input_number.temp_slider_controller') }}"
+      living_room_temperature:
+        friendly_name: "living_room Temp Sensor"
+        unit_of_measurement: "celsius"
+        value_template: "{{ states('input_number.temp_slider_livingroom') }}"
+      bedroom_temperature:
+        friendly_name: "bedroom Temp Sensor"
+        unit_of_measurement: "celsius"
+        value_template: "{{ states('input_number.temp_slider_bedroom') }}"
+
+## Create fake controller
+input_boolean:
+  fake_controller_state:
+    name: Fake Heater State
+    initial: off
+  living_room_state:
+    name: Living Room State
+    initial: off
+  bedroom_state:
+    name: Bedroom State
+    initial: off
+
+switch:
+  - platform: template
+    switches:
+      fake_controller:
+        value_template: "{{ states('input_boolean.fake_controller_state') }}"
+        turn_on:
+          service: input_boolean.turn_on
+          entity_id: input_boolean.fake_controller_state
+        turn_off:
+          service: input_boolean.turn_off
+          entity_id: input_boolean.fake_controller_state
+      living_room:
+        value_template: "{{ states('input_boolean.living_room_state') }}"
+        turn_on:
+          service: input_boolean.turn_on
+          entity_id: input_boolean.living_room_state
+        turn_off:
+          service: input_boolean.turn_off
+          entity_id: input_boolean.living_room_state
+      bedroom:
+        value_template: "{{ states('input_boolean.bedroom_state') }}"
+        turn_on:
+          service: input_boolean.turn_on
+          entity_id: input_boolean.bedroom_state
+        turn_off:
+          service: input_boolean.turn_off
+          entity_id: input_boolean.bedroom_state
+
+climate:
+  - platform: generic_thermostat
+    name: Climate Controller
+    target_sensor: sensor.controller_temperature
+    heater: switch.fake_controller
+    target_temp: 22
+    min_temp: 16
+    max_temp: 35
+    target_temp_step: 0.5
+
+  - platform: generic_thermostat
+    name: Living Room
+    target_sensor: sensor.living_room_temperature
+    heater: switch.living_room
+    target_temp: 22
+    min_temp: 16
+    max_temp: 25
+    target_temp_step: 1
+
+  - platform: generic_thermostat
+    name: Bedroom
+    target_sensor: sensor.bedroom_temperature
+    heater: switch.bedroom
+    target_temp: 22
+    min_temp: 16
+    max_temp: 25
+    target_temp_step: 1

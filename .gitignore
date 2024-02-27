@@ -177,4 +177,5 @@ pyrightconfig.json
 
 .storage
 
-.homeassistant
+.homeassistant/*
+!.homeassistant/configuration.yaml
