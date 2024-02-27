@@ -301,8 +301,11 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         self._override_active = True
         current_state = parse_state(self.hass.states.get(self._controller_entity))
         
+        if (isinstance(current_state[ATTR_TEMPERATURE], (int, float)) == False):
+            current_state[ATTR_TEMPERATURE] = current_state[ATTR_CURRENT_TEMPERATURE]
+        
         # If input needs to be ignored, let's set it to the actual current temperature
-        if self._ignore_controller or (isinstance(current_state[ATTR_TEMPERATURE], (int, float)) == False):
+        if self._ignore_controller:
             _LOGGER.debug('Overriding current temperature to {}'.format(current_state[ATTR_CURRENT_TEMPERATURE]))
             await async_set_temperature(self.hass, self._controller_entity, current_state[ATTR_CURRENT_TEMPERATURE]) 
         
