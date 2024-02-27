@@ -13,7 +13,8 @@
           "max_setpoint": "Maximum temperature the controller is allowed to heat to",
           "controller_delay_time": "Delay which the controller will use to start heating",
           "ignore_controller": "If true all inputs on controller will be ignored",
-          "controller_max_step": "Max temperature difference useful for not stressing your CV too much"
+          "controller_max_step": "Max temperature difference useful for not stressing your CV too much",
+          "controller_fallback": "Select the state to which the controller needs to fallback to"
         }
       },
       "zones": {

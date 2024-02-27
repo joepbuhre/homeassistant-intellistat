@@ -36,7 +36,7 @@ from homeassistant.components.climate.const import (
 )
 
 from homeassistant.const import (
-    MATCH_ALL
+    MATCH_ALL, EVENT_STATE_CHANGED
 )
 
 from . import const
@@ -63,23 +63,26 @@ async def async_setup_entry(
     max_setpoint = config_entry.options.get(const.CONF_MAX_SETPOINT)
     controller_delay_time = config_entry.options.get(const.CONF_CONTROLLER_DELAY_TIME, const.DEFAULT_CONTROLLER_DELAY_TIME)
     ignore_controller = config_entry.options.get(const.CONF_IGNORE_CONTROLLER, const.DEFAULT_IGNORE_CONTROLLER) 
-    
+    max_controller_step = config_entry.options.get(const.CONF_CONTROLLER_MAX_STEP, const.DEFAULT_CONTROLLER_MAX_STEP) 
+    controller_fallback = config_entry.options.get(const.CONF_CONTROLLER_FALLBACK, None)
+
     async_add_entities([
-        ZonedHeaterSwitch(hass, controller, zones, max_setpoint, controller_delay_time, ignore_controller, config_entry.options)
+        ZonedHeaterSwitch(hass, controller, zones, max_setpoint, controller_delay_time, ignore_controller, max_controller_step, controller_fallback)
     ])
 
 class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
     _attr_name = "Zoned Heating"
 
-    def __init__(self, hass, controller_entity: str, zone_entities, max_setpoint, controller_delay_time, ignore_controller: bool, config_options: MappingProxyType[str, Any]):
+    def __init__(self, hass, controller_entity: str, zone_entities, max_setpoint, controller_delay_time, ignore_controller: bool, max_controller_step: float, controller_fallback: HVACMode | None):
         self.hass = hass
         self._controller_entity = controller_entity
         self._zone_entities = zone_entities
         self._max_setpoint = max_setpoint
         self._controller_delay_time = controller_delay_time
-        self._config_options = config_options
         self._ignore_controller = ignore_controller
+        self._max_controller_step = max_controller_step
+        self._controller_fallback = controller_fallback
 
         self._enabled = None
         self._state_listeners = {}
@@ -131,6 +134,7 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
             const.ATTR_TEMPERATURE_INCREASE: self._temperature_increase,
             const.ATTR_STORED_CONTROLLER_STATE: self._stored_controller_state,
             const.ATTR_STORED_CONTROLLER_SETPOINT: self._stored_controller_setpoint,
+            const.CONF_CONTROLLER_MAX_STEP: self._max_controller_step,
         }
 
     async def async_turn_on(self, **kwargs):
@@ -159,18 +163,17 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         if not len(self._zone_entities) or not self._controller_entity:
             return
 
-        if self._ignore_controller:
-            async def set_initial_temperature(event: Event):
-                if event.data.get('entity_id') == 'climate.climate_controller':
-                    st = parse_state(event.data.get('new_state'))
-                    if st[ATTR_CURRENT_TEMPERATURE] is not None and st[ATTR_CURRENT_TEMPERATURE] > 0 and 'init_temperature' in self._state_listeners:
-                        self._state_listeners.pop('init_temperature')()
-                        await async_set_temperature(self.hass, self._controller_entity, st[ATTR_CURRENT_TEMPERATURE])
+        # if self._ignore_controller:
+        #     async def set_initial_temperature(event: Event):
+        #         if event.data.get('entity_id') == self._controller_entity:
+        #             st = parse_state(event.data.get('new_state'))
+        #             if st[ATTR_CURRENT_TEMPERATURE] is not None and st[ATTR_CURRENT_TEMPERATURE] > 0 and 'init_temperature' in self._state_listeners:
+        #                 self._state_listeners.pop('init_temperature')()
+        #                 await async_set_temperature(self.hass, self._controller_entity, st[ATTR_CURRENT_TEMPERATURE])
 
-            self._state_listeners['init_temperature'] = self.hass.bus.async_listen(
-                MATCH_ALL, set_initial_temperature
-            )
-
+        #     self._state_listeners['init_temperature'] = self.hass.bus.async_listen(
+        #         MATCH_ALL, set_initial_temperature
+        #     )
 
         self._state_listeners = {
             'controller_state': async_track_state_change(
@@ -183,7 +186,7 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
                 self.hass,
                 self._zone_entities,
                 self.async_zone_state_changed,
-            )
+            ),
         }
 
 
@@ -201,6 +204,11 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         old_state = parse_state(old_state)
         new_state = parse_state(new_state)
 
+        if new_state[ATTR_HVAC_MODE] != old_state[ATTR_HVAC_MODE] and new_state[ATTR_HVAC_MODE] == HVACAction.OFF:
+            _LOGGER.debug("Controller was turned off, disable zones")
+            await self.async_turn_off_zones()
+            return
+        
         if new_state[ATTR_TEMPERATURE] != old_state[ATTR_TEMPERATURE]:
             new_setpoint = new_state[ATTR_CURRENT_TEMPERATURE] if self._ignore_controller else new_state[ATTR_TEMPERATURE]
             # if controller setpoint has changed, make sure to store it
@@ -211,9 +219,6 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
                 await self._ignore_controller_state_changes()
                 await async_set_temperature(self.hass, self._controller_entity, old_state[ATTR_TEMPERATURE])
 
-        if new_state[ATTR_HVAC_MODE] != old_state[ATTR_HVAC_MODE] and new_state[ATTR_HVAC_MODE] == HVACAction.OFF:
-            _LOGGER.debug("Controller was turned off, disable zones")
-            await self.async_turn_off_zones()
 
     @callback
     async def async_zone_state_changed(self, entity, old_state, new_state):
@@ -222,9 +227,16 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         new_state = parse_state(new_state)
 
         if (
-            old_state[ATTR_TEMPERATURE] != new_state[ATTR_TEMPERATURE] and
-            isinstance(new_state[ATTR_TEMPERATURE], float) and
-            isinstance(new_state[ATTR_CURRENT_TEMPERATURE], float)
+            (
+                # Resolve True when temperature setpoint has changed
+                old_state[ATTR_TEMPERATURE] != new_state[ATTR_TEMPERATURE] and
+                isinstance(new_state[ATTR_TEMPERATURE], float) and
+                isinstance(new_state[ATTR_CURRENT_TEMPERATURE], float)
+            ) or (
+                # Resolve True when current temperature has changed
+                old_state[ATTR_CURRENT_TEMPERATURE] != new_state[ATTR_CURRENT_TEMPERATURE] and
+                isinstance(new_state[ATTR_CURRENT_TEMPERATURE], float)
+            )
         ):
             # setpoint of a zone was updated, check whether controller needs to be updated
             _LOGGER.debug("Zone {} updated: setpoint={}".format(entity, new_state[ATTR_TEMPERATURE]))
@@ -263,7 +275,7 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
             return
 
         # Check if max step is active (If not zero it's enabled)
-        max_step = self._config_options.get(const.CONF_CONTROLLER_MAX_STEP, const.DEFAULT_CONTROLLER_MAX_STEP)
+        max_step = self._max_controller_step
         if max_step != 0:
             if max_step < temperature_increase:
                 _LOGGER.debug("Taking max step in account: {}".format(max_step))
@@ -290,7 +302,7 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         current_state = parse_state(self.hass.states.get(self._controller_entity))
         
         # If input needs to be ignored, let's set it to the actual current temperature
-        if self._config_options.get(const.CONF_IGNORE_CONTROLLER, const.DEFAULT_IGNORE_CONTROLLER) == True:
+        if self._ignore_controller:
             await async_set_temperature(self.hass, self._controller_entity, current_state[ATTR_CURRENT_TEMPERATURE]) 
         
         # store current controller entity settings for later
@@ -321,7 +333,11 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
         if current_state[ATTR_HVAC_MODE] != self._stored_controller_state and self._stored_controller_state is not None:
             if compute_domain(self._controller_entity) == Platform.CLIMATE:
-                await async_set_hvac_mode(self.hass, self._controller_entity, self._stored_controller_state)
+                await async_set_hvac_mode(
+                    self.hass,
+                    self._controller_entity,
+                    self._stored_controller_state if self._controller_fallback is None else self._controller_fallback
+                )
             elif compute_domain(self._controller_entity) == Platform.SWITCH:
                 await async_set_switch_state(self.hass, self._controller_entity, self._stored_controller_state)
 
