@@ -67,6 +67,7 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
         self.max_setpoint = curr_settings.get(const.CONF_MAX_SETPOINT)
         self.controller_delay_time = curr_settings.get(const.CONF_CONTROLLER_DELAY_TIME)
         self.ignore_controller = curr_settings.get(const.CONF_IGNORE_CONTROLLER)
+        self.controller_fallback = curr_settings.get(const.CONF_CONTROLLER_FALLBACK)
 
     def __get_unit_of_measurement(self):
         if self.controller is None:
@@ -80,6 +81,12 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             return 1
         step = self.hass.states.get(self.controller).attributes.get('target_temp_step', 1)
         return step
+    
+    def __get_hvac_states(self):
+        if self.controller is None:
+            return None
+        
+        return self.hass.states.get(self.controller).attributes.get('hvac_modes')
 
     def __parse_user_input(self, user_input):
         for key in user_input:
@@ -180,6 +187,19 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             )
         ] = selector.BooleanSelector()
 
+        # Ask for fallback value
+        fields[
+            vol.Optional(
+                const.CONF_CONTROLLER_FALLBACK,
+                default=self.curr_settings.get(const.CONF_CONTROLLER_FALLBACK)
+            )
+        ] = selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=list(map(lambda mode: selector.SelectOptionDict(value=mode, label=str(mode)), self.__get_hvac_states())),
+                mode=selector.SelectSelectorMode.DROPDOWN,
+            )
+        )
+
         return self.async_show_form(step_id="controller_settings", data_schema=vol.Schema(fields))
 
 
@@ -197,7 +217,8 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
                 const.CONF_MAX_SETPOINT: self.max_setpoint,
                 const.CONF_CONTROLLER_DELAY_TIME: self.controller_delay_time,
                 const.CONF_IGNORE_CONTROLLER: self.ignore_controller,
-                const.CONF_CONTROLLER_MAX_STEP: self.controller_max_step
+                const.CONF_CONTROLLER_MAX_STEP: self.controller_max_step,
+                const.CONF_CONTROLLER_FALLBACK: self.controller_fallback
             })
         
 
@@ -216,3 +237,4 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
             )
         )
         return self.async_show_form(step_id=const.CONF_ZONES, data_schema=vol.Schema(zone_controllers))
+        

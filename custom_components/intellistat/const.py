@@ -12,6 +12,7 @@ CONF_MAX_SETPOINT = "max_setpoint"
 CONF_CONTROLLER_DELAY_TIME = "controller_delay_time"
 CONF_IGNORE_CONTROLLER = 'ignore_controller'
 CONF_CONTROLLER_MAX_STEP = 'controller_max_step'
+CONF_CONTROLLER_FALLBACK = 'controller_fallback'
 
 DEFAULT_MAX_SETPOINT = 21
 DEFAULT_CONTROLLER_DELAY_TIME = 10
