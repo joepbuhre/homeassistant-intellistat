@@ -21,7 +21,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import ToggleEntity
 
 from homeassistant.helpers.event import (
-    async_track_state_change,
+    async_track_state_change_event,
     async_track_point_in_time,
     _async_track_event,
 
@@ -176,13 +176,13 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         #     )
 
         self._state_listeners = {
-            'controller_state': async_track_state_change(
+            'controller_state': async_track_state_change_event(
                 self.hass,
                 self._controller_entity,
                 self.async_controller_state_changed,
 
             ),
-            'zone_state':  async_track_state_change(
+            'zone_state':  async_track_state_change_event(
                 self.hass,
                 self._zone_entities,
                 self.async_zone_state_changed,
