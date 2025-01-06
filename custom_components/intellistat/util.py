@@ -24,19 +24,20 @@ from homeassistant.components.climate.const import (
     SERVICE_SET_TEMPERATURE,
 )
 from homeassistant.core import (
-    HomeAssistant,
+    HomeAssistant,State
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 
-def parse_state(state):
+def parse_state(state: State):
     data = {}
 
     for key in [ATTR_TEMPERATURE, ATTR_TARGET_TEMP_LOW, ATTR_CURRENT_TEMPERATURE, ATTR_HVAC_ACTION]:
         data[key] = state.attributes.get(key) if state and state.attributes else None
     
-    if ATTR_TARGET_TEMP_LOW in data:
+    if ATTR_TARGET_TEMP_LOW in data and data[ATTR_TARGET_TEMP_LOW] is not None and data[ATTR_TARGET_TEMP_LOW] > 0:
+        _LOGGER.debug(f"Found that attr target temp low was in dict changing now")
         data[ATTR_TEMPERATURE] = data[ATTR_TARGET_TEMP_LOW]
 
     data[ATTR_HVAC_MODE] = state.state if state else None
@@ -55,6 +56,14 @@ def parse_state(state):
                 data[ATTR_HVAC_ACTION] = HVACAction.IDLE
         else:
             data[ATTR_HVAC_ACTION] = HVACAction.OFF
+
+    if data[ATTR_TEMPERATURE] is None and data[ATTR_TARGET_TEMP_LOW] is None:
+        _LOGGER.debug("\n\nParsed state")
+        _LOGGER.debug(state.entity_id)
+        _LOGGER.debug(data)
+        _LOGGER.debug(state)
+        _LOGGER.debug("\n\n\n")
+
 
     return data
 
