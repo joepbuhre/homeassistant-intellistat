@@ -16,6 +16,7 @@ from homeassistant.const import (
 from homeassistant.components.climate.const import (
     ATTR_HVAC_MODE,
     ATTR_CURRENT_TEMPERATURE,
+    ATTR_TARGET_TEMP_LOW,
     ATTR_HVAC_ACTION,
     HVACMode,
     HVACAction,
@@ -32,8 +33,11 @@ _LOGGER = logging.getLogger(__name__)
 def parse_state(state):
     data = {}
 
-    for key in [ATTR_TEMPERATURE, ATTR_CURRENT_TEMPERATURE, ATTR_HVAC_ACTION]:
+    for key in [ATTR_TEMPERATURE, ATTR_TARGET_TEMP_LOW, ATTR_CURRENT_TEMPERATURE, ATTR_HVAC_ACTION]:
         data[key] = state.attributes.get(key) if state and state.attributes else None
+    
+    if ATTR_TARGET_TEMP_LOW in data:
+        data[ATTR_TEMPERATURE] = data[ATTR_TARGET_TEMP_LOW]
 
     data[ATTR_HVAC_MODE] = state.state if state else None
 
