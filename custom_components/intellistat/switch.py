@@ -21,7 +21,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import ToggleEntity
 
 from homeassistant.helpers.event import (
-    async_track_state_change,
+    async_track_state_change_event,
     async_track_point_in_time,
     _async_track_event,
 
@@ -176,13 +176,13 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         #     )
 
         self._state_listeners = {
-            'controller_state': async_track_state_change(
+            'controller_state': async_track_state_change_event(
                 self.hass,
                 self._controller_entity,
                 self.async_controller_state_changed,
 
             ),
-            'zone_state':  async_track_state_change(
+            'zone_state':  async_track_state_change_event(
                 self.hass,
                 self._zone_entities,
                 self.async_zone_state_changed,
@@ -197,12 +197,13 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
         self._state_listeners.clear()
 
     @callback
-    async def async_controller_state_changed(self, entity, old_state, new_state):
+    async def async_controller_state_changed(self, event):
+
         """fired when controller entity changes"""
         if self._ignore_controller_state_change_timer or not self._override_active:
             return
-        old_state = parse_state(old_state)
-        new_state = parse_state(new_state)
+        old_state = parse_state(event.data["old_state"])
+        new_state = parse_state(event.data["new_state"])
 
         if new_state[ATTR_HVAC_MODE] != old_state[ATTR_HVAC_MODE] and new_state[ATTR_HVAC_MODE] == HVACAction.OFF:
             _LOGGER.debug("Controller was turned off, disable zones")
@@ -225,11 +226,12 @@ class ZonedHeaterSwitch(ToggleEntity, RestoreEntity):
 
 
     @callback
-    async def async_zone_state_changed(self, entity, old_state, new_state):
+    async def async_zone_state_changed(self, event):
         """fired when zone entity changes"""
-        old_state = parse_state(old_state)
-        new_state = parse_state(new_state)
-
+        entity = event.data["entity_id"]
+        old_state = parse_state(event.data["old_state"])
+        new_state = parse_state(event.data["new_state"])
+        
         if (
             (
                 # Resolve True when temperature setpoint has changed
