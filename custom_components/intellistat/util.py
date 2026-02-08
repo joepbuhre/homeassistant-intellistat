@@ -59,7 +59,7 @@ def parse_state(state: State):
 
     if data[ATTR_TEMPERATURE] is None and data[ATTR_TARGET_TEMP_LOW] is None:
         _LOGGER.debug("\n\nParsed state")
-        _LOGGER.debug(state.entity_id)
+        _LOGGER.debug(state)
         _LOGGER.debug(data)
         _LOGGER.debug(state)
         _LOGGER.debug("\n\n\n")
