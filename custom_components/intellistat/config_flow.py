@@ -56,7 +56,6 @@ class OptionsFlowHandler(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry):
         """Initialize options flow."""
-        self.config_entry = config_entry
         curr_settings = config_entry.options
         self.curr_settings = config_entry.options
 
